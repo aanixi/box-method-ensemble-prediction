@@ -1,0 +1,37 @@
+# Virtuaaliympäristö
+venv/
+.venv/
+env/
+
+# Python-välimuisti
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Jupyter-notebookien välimuisti
+.ipynb_checkpoints/
+
+# VS Code -asetukset (näitä ei yleensä jaeta)
+.vscode/
+
+# Käyttöjärjestelmä
+.DS_Store
+Thumbs.db
+
+# Datatiedostot (lisätään myöhemmin tarpeen mukaan)
+data/
+*.parquet
+*.csv
+
+# Ympäristömuuttujat (saattavat sisältää API-avaimia)
+.env
+.env.local
+
+# Mallien tallennustiedostot
+*.pkl
+*.joblib
+
+# Logit
+*.log
