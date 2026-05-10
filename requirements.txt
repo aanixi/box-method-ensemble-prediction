@@ -1,0 +1,21 @@
+# Datan haku ja käsittely
+pandas>=2.2.0
+numpy>=1.26.0
+pyarrow>=15.0.0
+requests>=2.31.0
+
+# Tekniset indikaattorit
+pandas-ta>=0.3.14b0
+
+# Visualisointi
+matplotlib>=3.8.0
+seaborn>=0.13.0
+plotly>=5.18.0
+
+# Koneoppiminen
+scikit-learn>=1.4.0
+xgboost>=2.0.0
+
+# Jupyter-tuki
+jupyter>=1.0.0
+ipykernel>=6.29.0
