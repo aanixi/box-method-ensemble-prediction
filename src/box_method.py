@@ -149,7 +149,7 @@ def find_setups_for_day(
                 if candle["close"] > pending_pivot["high"]:
                     setup_counter += 1
                     entry_price = candle["close"]
-                    sl = candle["low"]
+                    sl = pending_pivot["low"] - entry_price * 0.0015  # pieni bufferi SL:ään
                     tp = box_high
                     rr = (tp - entry_price) / (entry_price - sl) if entry_price > sl else float("nan")
 
@@ -183,7 +183,7 @@ def find_setups_for_day(
                 if candle["close"] < pending_pivot["low"]:
                     setup_counter += 1
                     entry_price = candle["close"]
-                    sl = candle["high"]
+                    sl = pending_pivot["high"] + entry_price * 0.0015  # pieni bufferi SL:ään
                     tp = box_low
                     rr = (entry_price - tp) / (sl - entry_price) if sl > entry_price else float("nan")
 
