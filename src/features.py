@@ -145,3 +145,60 @@ def add_group_b_features(setups: pd.DataFrame, daily_data: dict) -> pd.DataFrame
     df["box_size_vs_atr14d"] = box_size / atr14_values
 
     return df
+
+def add_group_c_features(setups_df, df_4h):
+    """
+    Lisää Ryhmä C:n piirteet: multi-timeframe trendi 4h-aikakehyksestä.
+    
+    Parametrit:
+        setups_df: DataFrame setupeista, jossa pakollinen sarake 'entry_time' (UTC, tz-aware)
+        df_4h: DataFrame 4h-kynttilöistä, indeksinä open_time (UTC, tz-aware),
+               vähintään sarakkeet 'close' ja 'close_time'
+    
+    Lisättävät piirteet:
+        ema50_4h: 4h EMA(50) close-hinnasta (aputieto, ei välttämättä mukaan ML:ään)
+        ema200_4h: 4h EMA(200) close-hinnasta (aputieto)
+        trend_4h: (EMA50 - EMA200) / EMA200, jatkuva trendin voimakkuusmitta
+                  Positiivinen = nouseva trendi, negatiivinen = laskeva
+        trend_aligned: 1 jos setupin direction on trend_4h:n kanssa samansuuntainen,
+                       0 muuten (long+nouseva tai short+laskeva = 1)
+    
+    Look-ahead-suojaus: jokaiselle setupille käytetään viimeisintä 4h-kynttilää,
+    jonka close_time <= entry_time. Eli kynttilä on jo sulkeutunut entry-hetkellä.
+    """
+    setups = setups_df.copy()
+    
+    # 1) Laske EMA:t koko 4h-datasta. EMA on rekursiivinen, mutta pandas
+    #    hoitaa sen oikein: ewm(span=N, adjust=False) vastaa klassista
+    #    EMA-kaavaa alpha = 2/(N+1).
+    df = df_4h.sort_index().copy()
+    df['ema50_4h'] = df['close'].ewm(span=50, adjust=False).mean()
+    df['ema200_4h'] = df['close'].ewm(span=200, adjust=False).mean()
+    df['trend_4h'] = (df['ema50_4h'] - df['ema200_4h']) / df['ema200_4h']
+    
+    # 2) Asetetaan aikaleima jolla mergeataan: kynttilän close_time.
+    #    Käytetään merge_asof:ia: jokaiselle setupille etsitään suurin
+    #    close_time joka on <= entry_time. Tämä takaa look-ahead-suojan.
+    trend_data = df[['close_time', 'ema50_4h', 'ema200_4h', 'trend_4h']].copy()
+    trend_data = trend_data.sort_values('close_time')
+    
+    setups_sorted = setups.sort_values('entry_time').copy()
+    
+    merged = pd.merge_asof(
+        setups_sorted,
+        trend_data,
+        left_on='entry_time',
+        right_on='close_time',
+        direction='backward'  # viimeisin close_time joka <= entry_time
+    )
+    
+    # 3) Trend_aligned -lippu: long+positiivinen trendi tai short+negatiivinen
+    merged['trend_aligned'] = (
+        ((merged['direction'] == 'long') & (merged['trend_4h'] > 0)) |
+        ((merged['direction'] == 'short') & (merged['trend_4h'] < 0))
+    ).astype(int)
+    
+    # 4) Palautetaan alkuperäiseen järjestykseen (merge_asof vaati lajittelun)
+    merged = merged.sort_index() if merged.index.is_monotonic_increasing else merged
+    
+    return merged
