@@ -202,3 +202,224 @@ def add_group_c_features(setups_df, df_4h):
     merged = merged.sort_index() if merged.index.is_monotonic_increasing else merged
     
     return merged
+
+def _calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """
+    Laske Average True Range (ATR) Wilderin smoothed moving average -menetelmällä.
+
+    True Range = max(high - low, |high - prev_close|, |low - prev_close|)
+    ATR = Wilderin tasoitus TR:stä periodilla N (= ewm alpha=1/N, adjust=False).
+
+    Parametrit
+    ----------
+    df : pd.DataFrame
+        OHLC-data sarakkeilla 'high', 'low', 'close'. Indeksin tulee olla
+        aikajärjestyksessä.
+    period : int
+        ATR-periodi (oletus 14).
+
+    Palauttaa
+    ---------
+    pd.Series
+        ATR-arvot samalla indeksillä kuin df.
+    """
+    high = df['high']
+    low = df['low']
+    prev_close = df['close'].shift(1)
+
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
+
+    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = true_range.ewm(alpha=1 / period, adjust=False).mean()
+
+    return atr
+
+def _calculate_rsi(close: pd.Series, period: int = 14) -> pd.Series:
+    """
+    Laske Relative Strength Index (RSI) Wilderin tasoituksella.
+
+    Tämä on TradingView-yhteensopiva laskenta (sama kuin pandas-ta:n oletus).
+
+    Parametrit
+    ----------
+    close : pd.Series
+        Sulkemishintojen sarja aikajärjestyksessä.
+    period : int
+        RSI-periodi (oletus 14).
+
+    Palauttaa
+    ---------
+    pd.Series
+        RSI-arvot välillä 0–100, samalla indeksillä kuin close.
+    """
+    delta = close.diff()
+
+    gains = delta.where(delta > 0, 0.0)
+    losses = -delta.where(delta < 0, 0.0)
+
+    avg_gain = gains.ewm(alpha=1 / period, adjust=False).mean()
+    avg_loss = losses.ewm(alpha=1 / period, adjust=False).mean()
+
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi
+
+def add_group_d_features(
+    setups_df: pd.DataFrame,
+    df_15m: pd.DataFrame,
+    df_1h: pd.DataFrame,
+    df_1d: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Lisää Ryhmä D:n piirteet (volatiliteetti ja momentum) setupeihin.
+
+    Lisättävät piirteet (yhteensä 7):
+        ATR:
+        - atr_15m_pct: ATR(14, 15m) / close, prosenttiosuus hinnasta
+        - atr_15m_vs_atr_daily: ATR(14, 15m) / ATR(14, 1d)
+        - atr_1h_pct: ATR(14, 1h) / close
+        - atr_1h_vs_atr_daily: ATR(14, 1h) / ATR(14, 1d)
+
+        RSI:
+        - rsi_15m: RSI(14, 15m), Wilder, 0–100
+        - rsi_1h: RSI(14, 1h), Wilder, 0–100
+
+        Volyymi:
+        - volume_vs_ma20_15m: volume / SMA(volume, 20) 15m-aikakehyksessä
+
+    Look-ahead-suojaus: kaikki piirteet poimitaan viimeisimmästä valmiista
+    kynttilästä ennen setupin entry_time:ä, käyttäen merge_asof
+    direction='backward' close_time:n perusteella.
+
+    Parametrit
+    ----------
+    setups_df : pd.DataFrame
+        Setupit, joissa on vähintään sarakkeet 'entry_time' ja 'symbol'.
+    df_15m, df_1h, df_1d : pd.DataFrame
+        OHLCV-data 15m, 1h ja 1d aikakehyksissä. Indeksinä open_time,
+        sarakkeissa myös 'close_time'. Sarakkeet: open, high, low, close,
+        volume, close_time.
+
+    Palauttaa
+    ---------
+    pd.DataFrame
+        setups_df kopiona, jossa 7 uutta saraketta.
+    """
+    result = setups_df.copy()
+    result = result.drop(
+        columns=['close_time', 'close_time_x', 'close_time_y'],
+        errors='ignore',
+    )
+    # --- 1. Laske indikaattorit raakadatoille (symbolikohtaisesti) ---
+
+    def _prepare_15m(df: pd.DataFrame) -> pd.DataFrame:
+        """Laske ATR, RSI ja volyymisuhde 15m-datalle, symbolikohtaisesti."""
+        out = []
+        for symbol, group in df.groupby('symbol', sort=False):
+            g = group.sort_values('open_time').copy()
+            g['atr_15m'] = _calculate_atr(g, period=14)
+            g['rsi_15m'] = _calculate_rsi(g['close'], period=14)
+            g['volume_ma20'] = g['volume'].rolling(window=20, min_periods=20).mean()
+            g['volume_vs_ma20_15m'] = g['volume'] / g['volume_ma20']
+            out.append(g)
+        return pd.concat(out, ignore_index=True)
+
+    def _prepare_1h(df: pd.DataFrame) -> pd.DataFrame:
+        """Laske ATR ja RSI 1h-datalle, symbolikohtaisesti."""
+        out = []
+        for symbol, group in df.groupby('symbol', sort=False):
+            g = group.sort_values('open_time').copy()
+            g['atr_1h'] = _calculate_atr(g, period=14)
+            g['rsi_1h'] = _calculate_rsi(g['close'], period=14)
+            out.append(g)
+        return pd.concat(out, ignore_index=True)
+
+    def _prepare_1d(df: pd.DataFrame) -> pd.DataFrame:
+        """Laske ATR 1d-datalle, symbolikohtaisesti."""
+        out = []
+        for symbol, group in df.groupby('symbol', sort=False):
+            g = group.sort_values('open_time').copy()
+            g['atr_1d'] = _calculate_atr(g, period=14)
+            out.append(g)
+        return pd.concat(out, ignore_index=True)
+
+    df_15m_prep = _prepare_15m(df_15m)
+    df_1h_prep = _prepare_1h(df_1h)
+    df_1d_prep = _prepare_1d(df_1d)
+
+    # --- 2. Valmistele merge_asof:ia varten ---
+
+    # Setupit järjestettävä entry_time:n mukaan merge_asof:ia varten
+    result = result.sort_values('entry_time').reset_index(drop=True)
+
+    # Raakadatat järjestettävä close_time:n mukaan
+    df_15m_prep = df_15m_prep.sort_values('close_time').reset_index(drop=True)
+    df_1h_prep = df_1h_prep.sort_values('close_time').reset_index(drop=True)
+    df_1d_prep = df_1d_prep.sort_values('close_time').reset_index(drop=True)
+
+    # --- 3. Yhdistä 15m-piirteet ---
+
+    result = pd.merge_asof(
+        result,
+        df_15m_prep[['close_time', 'symbol', 'atr_15m', 'rsi_15m',
+                     'volume_vs_ma20_15m']],
+        left_on='entry_time',
+        right_on='close_time',
+        by='symbol',
+        direction='backward',
+    )
+    result = result.drop(
+    columns=['close_time', 'close_time_x', 'close_time_y'],
+    errors='ignore',
+    )
+
+    # --- 4. Yhdistä 1h-piirteet ---
+
+    result = pd.merge_asof(
+        result,
+        df_1h_prep[['close_time', 'symbol', 'atr_1h', 'rsi_1h']],
+        left_on='entry_time',
+        right_on='close_time',
+        by='symbol',
+        direction='backward',
+    )
+    result = result.drop(
+    columns=['close_time', 'close_time_x', 'close_time_y'],
+    errors='ignore',
+    )
+    # --- 5. Yhdistä 1d-ATR ---
+
+    result = pd.merge_asof(
+        result,
+        df_1d_prep[['close_time', 'symbol', 'atr_1d']],
+        left_on='entry_time',
+        right_on='close_time',
+        by='symbol',
+        direction='backward',
+    )
+    result = result.drop(
+    columns=['close_time', 'close_time_x', 'close_time_y'],
+    errors='ignore',
+    )
+
+    # --- 6. Johda lopulliset normalisoidut piirteet ---
+    # HUOM: alkuperäisestä 7 piirteestä karsittiin 3 korkean korrelaation
+    # vuoksi (ks. Ryhmä D löytödokumentti).
+    # Karsittu: atr_15m_pct (r=0.89 atr_1h_pct), atr_1h_vs_atr_daily (r=0.86
+    # atr_15m_vs_atr_daily), rsi_15m (r=0.89 rsi_1h).
+
+    result['atr_15m_vs_atr_daily'] = result['atr_15m'] / result['atr_1d']
+    result['atr_1h_pct'] = result['atr_1h'] / result['entry_price']
+
+    # --- 7. Pudota rsi_15m (karsittu) ja välilaskennan sarakkeet ---
+
+    result = result.drop(
+        columns=['atr_15m', 'atr_1h', 'atr_1d', 'rsi_15m'],
+        errors='ignore',
+    )
+
+    return result
+
