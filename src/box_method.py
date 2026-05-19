@@ -39,6 +39,7 @@ class Setup:
     stop_loss: float
     take_profit: float
     risk_reward_ratio: float     # (TP - entry) / (entry - SL)
+    reversal_candle_time: pd.Timestamp  # Käännekynttilän open_time (UTC)
 
     # Tulos
     outcome_time: Optional[pd.Timestamp]
@@ -167,6 +168,7 @@ def find_setups_for_day(
                         stop_loss=sl,
                         take_profit=tp,
                         risk_reward_ratio=rr,
+                        reversal_candle_time=pending_pivot.name,
                         outcome_time=None,
                         outcome="expired",  # päivitetään jos osuu
                         label=None,
@@ -201,6 +203,7 @@ def find_setups_for_day(
                         stop_loss=sl,
                         take_profit=tp,
                         risk_reward_ratio=rr,
+                        reversal_candle_time=pending_pivot.name,
                         outcome_time=None,
                         outcome="expired",
                         label=None,

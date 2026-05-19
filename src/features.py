@@ -423,3 +423,110 @@ def add_group_d_features(
 
     return result
 
+# =============================================================================
+# RYHMÄ E: KÄÄNNEKYNTTILÄN RAKENNE
+# =============================================================================
+
+# =============================================================================
+# RYHMÄ E: KÄÄNNEKYNTTILÄN RAKENNE
+# =============================================================================
+
+def add_group_e_features(
+    setups_df: pd.DataFrame,
+    df_5m: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Lisää Ryhmä E:n piirteet setup-DataFrame:en.
+
+    Piirteet:
+    - reversal_candle_size_pct: käännekynttilän koko (high-low) / entry_price
+    - minutes_in_opposite_half: aika (minuuteissa) jonka hinta vietti
+      "vastakkaisessa" puoliskossa päivän alusta käännekynttilään asti
+      (long: close < box_mid; short: close > box_mid)
+
+    Look-ahead-suojaus:
+    - Käännekynttilän high/low haetaan tarkasti reversal_candle_time:n perusteella
+    - Vastakkaisen puoliskon laskenta tehdään vain käännekynttilään asti
+
+    Args:
+        setups_df: setup-DataFrame, jossa pitää olla sarake 'reversal_candle_time'
+        df_5m: 5min-kynttilät, indeksinä open_time (UTC), sarakkeena 'symbol'
+
+    Returns:
+        DataFrame jossa Ryhmä E:n piirteet lisättyinä
+    """
+    setups = setups_df.copy()
+
+    # ----- 1. Käännekynttilän koko (high-low) -----
+    # Mergeä 5m-kynttilän high ja low käännekynttilän aikaleimaan
+    df_5m_subset = df_5m[['symbol', 'high', 'low']].copy()
+    df_5m_subset = df_5m_subset.reset_index().rename(
+        columns={'open_time': 'reversal_candle_time',
+                 'high': 'reversal_high',
+                 'low': 'reversal_low'}
+    )
+
+    setups = setups.merge(
+        df_5m_subset,
+        on=['symbol', 'reversal_candle_time'],
+        how='left',
+    )
+
+    # Sanity: kaikilla pitäisi nyt olla high ja low
+    missing = setups['reversal_high'].isna().sum()
+    if missing > 0:
+        print(f"VAROITUS: {missing} setupia joilta puuttuu käännekynttilän high/low")
+
+    # Lasketaan piirre 1
+    setups['reversal_candle_size_pct'] = (
+        (setups['reversal_high'] - setups['reversal_low']) / setups['entry_price']
+    )
+
+    # ----- 2. Aika vastakkaisessa puoliskossa -----
+    # Jokaiselle setupille katsotaan saman päivän 5m-kynttilät päivän alusta
+    # käännekynttilään asti, ja lasketaan kuinka monta niistä oli
+    # "vastakkaisessa" puoliskossa.
+
+    def _minutes_in_opposite_half(row, df_5m):
+        symbol = row['symbol']
+        direction = row['direction']
+        box_mid = row['box_mid']
+        reversal_time = row['reversal_candle_time']
+
+        # Päivän alku UTC
+        day_start = reversal_time.normalize()
+
+        # Saman päivän 5m-kynttilät symbolille, päivän alusta käännekynttilään asti
+        mask = (
+            (df_5m['symbol'] == symbol)
+            & (df_5m.index >= day_start)
+            & (df_5m.index <= reversal_time)
+        )
+        day_candles = df_5m.loc[mask]
+
+        if len(day_candles) == 0:
+            return 0
+
+        # Vastakkainen puolisko:
+        # - long: close < box_mid (hinta oli alapuoliskossa)
+        # - short: close > box_mid (hinta oli yläpuoliskossa)
+        if direction == 'long':
+            opposite_count = (day_candles['close'] < box_mid).sum()
+        else:  # short
+            opposite_count = (day_candles['close'] > box_mid).sum()
+
+        return int(opposite_count) * 5  # minuuteiksi
+
+    print("Lasketaan minutes_in_opposite_half-piirrettä (kestää muutaman sekunnin)...")
+    setups['minutes_in_opposite_half'] = setups.apply(
+        lambda row: _minutes_in_opposite_half(row, df_5m),
+        axis=1,
+    )
+
+    # ----- Siivous -----
+    setups = setups.drop(
+        columns=['reversal_high', 'reversal_low'],
+        errors='ignore',
+    )
+
+    return setups
